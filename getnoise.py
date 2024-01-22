@@ -82,7 +82,6 @@ def get_apernoise(imroot, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, de
         outroot = imroot
 
     # check unit, only 10nanoJy, muJy, and MJy/sr supported, internally converted to muJy
-    #bunit = head['BUNIT']
     if (bunit == 'MJy/sr'):
         try:
             pixarsr = head['PIXAR_SR']
@@ -94,8 +93,8 @@ def get_apernoise(imroot, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, de
     elif (bunit == '10nanoJy'):
         calfactor = 1e-2
     else:
-        print('Unsuppported BUNIT. Aborting.')
-        sys.exit()
+        warnings.filterwarnings("ignore")
+        raise SystemExit('Unsupported bunit. Must be one of ["MJy/sr", "muJy", or "10nanoJy"]. Aborting.')
 
     # set native pixel scale depending on detector
     if (detector == 'MIRIMAGE'):
@@ -107,7 +106,6 @@ def get_apernoise(imroot, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, de
     elif (detector == 'NIRISS'):
         natscale = 0.0655
     else:
-        #print('Only JWST:NIRCAM/MIRI/NIRISS images are supported. Aborting.')
         warnings.filterwarnings("ignore")
         raise SystemExit('Only JWST:NIRCAM/MIRI/NIRISS images are supported. Aborting.')
 

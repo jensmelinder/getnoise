@@ -11,6 +11,8 @@ import random
 import matplotlib
 from scipy.interpolate import make_interp_spline
 from copy import copy
+import sys
+import warnings
 
 def avsigclip(data,niter,sig):
     """
@@ -24,10 +26,19 @@ def avsigclip(data,niter,sig):
         stdev= data.std()
     return mean,stdev
 
-def get_apcor(rad, apcorfname, pscale, plot=True):
+def get_apcor(rad, apcorfname, pscale, filter, plot=True):
     '''Get aperture correction at radius in arcsec.'''
     apcordata = fits.getdata(apcorfname)
-    mm = (apcordata['filter'] =='F560W') & (apcordata['subarray'] =='FULL')
+    if ('miri' in apcorfname):
+        mm = (apcordata['filter'] == filter) & (apcordata['subarray'] =='FULL')
+    elif ('nircam' in apcorfname):
+        mm = (apcordata['filter'] == filter)
+    elif ('niriss' in apcorfname):
+        mm = (apcordata['pupil'] == filter)
+    else:
+        warnings.warn(f"WARNING: Only MIRI/NIRCAM/NIRISS implemented. Using NIRCAM setup (which may fail).")
+        mm = (apcordata['filter'] == filter)
+
     rad_apcor = np.array([rr[3] for rr in apcordata[mm]])*pscale # arcsec
     apcor = np.array([rr[4] for rr in apcordata[mm]])
 
@@ -46,16 +57,21 @@ def get_apcor(rad, apcorfname, pscale, plot=True):
     return apcor_rmeas.flatten()[0]
 
 # function to calculate the stats
-def get_apernoise(imname, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, detlim=1.0, errstats=True, plots=True, 
-                  outroot='None', xs=-1, xe=-1, ys=-1, ye=-1, apcorfname = 'jwst_miri_apcorr_0010.fits'):
-    '''Function that calculates aperture statistics on a JWST image.'''
+def get_apernoise(imroot, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, detlim=1.0, minarea=10, errstats=True, plots=True, 
+                  outroot='None', xs=-1, xe=-1, ys=-1, ye=-1, apcorfname = 'jwst_miri_apcorr_0010.fits', 
+                  detector='MIRIM', pixfrac=1.0, bunit = 'MJy/sr', filter='F560W'):
+    '''Function that calculates aperture statistics on a JWST image. Uses HST style filenames (sci/wht).'''
     # read data
-    im=fits.getdata(imname).byteswap().newbyteorder()
-    head = fits.getheader(imname, 'SCI')
-    err=fits.getdata(imname, 'ERR').byteswap().newbyteorder()
+    im=fits.getdata(imroot+'_sci.fits', 0).byteswap().newbyteorder()
+    head = fits.getheader(imroot+'_sci.fits', 0)
+    wht=fits.getdata(imroot+'_wht.fits', 0).byteswap().newbyteorder()
     ima = np.ascontiguousarray(im)
-    err = np.ascontiguousarray(err)
+    wht = np.ascontiguousarray(wht)
     mask = np.where(ima==0, 1., 0.)
+    warnings.filterwarnings('ignore')
+    err = np.sqrt(1./np.where(mask==1,1,wht))
+    err = np.where(mask==1,0,err)
+    warnings.filterwarnings('default')
     if (xs!=-1):
         # cut out region with high depth
         ima = np.ascontiguousarray(ima[ys:ye,xs:xe])
@@ -63,13 +79,43 @@ def get_apernoise(imname, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, de
         mask = np.ascontiguousarray(mask[ys:ye,xs:xe])
 
     if (outroot=='None'):
-        outroot = imname.replace('.fits','')
+        outroot = imroot
+
+    # check unit, only 10nanoJy, muJy, and MJy/sr supported, internally converted to muJy
+    #bunit = head['BUNIT']
+    if (bunit == 'MJy/sr'):
+        try:
+            pixarsr = head['PIXAR_SR']
+        except:
+            pixarsr = head['PIXARSR']
+        calfactor = pixarsr * 1e12 # to get uJy from MJy/sr
+    elif (bunit == 'muJy'):
+        calfactor = 1.
+    elif (bunit == '10nanoJy'):
+        calfactor = 1e-2
+    else:
+        print('Unsuppported BUNIT. Aborting.')
+        sys.exit()
+
+    # set native pixel scale depending on detector
+    if (detector == 'MIRIMAGE'):
+        natscale = 0.11
+    elif (detector == 'NIRCAM-SW'):
+        natscale = 0.031
+    elif (detector == 'NIRCAM-LW'):
+        natscale = 0.063
+    elif (detector == 'NIRISS'):
+        natscale = 0.0655
+    else:
+        #print('Only JWST:NIRCAM/MIRI/NIRISS images are supported. Aborting.')
+        warnings.filterwarnings("ignore")
+        raise SystemExit('Only JWST:NIRCAM/MIRI/NIRISS images are supported. Aborting.')
 
     # make source mask
     bkg = sep.Background(ima, mask=mask, bw=128, bh=128, fw=3, fh=3)
     sub = ima - bkg
     sub = np.where(mask==1., 0, sub)
-    objects,segmap = sep.extract(sub, detlim, err=err, mask=mask, minarea=np.sqrt(0.36/pscale**2), filter_type='matched', deblend_nthresh=64, 
+    objects,segmap = sep.extract(sub, detlim, err=err, mask=mask, minarea=minarea, filter_type='matched', deblend_nthresh=64, 
                           deblend_cont=0.001, clean=True, clean_param=1.0, segmentation_map=True)
     sourcemask = np.where(segmap==0, 0, 1.)
     # get array of aperture "fluxes" from all pixels
@@ -128,13 +174,15 @@ def get_apernoise(imname, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, de
     if errstats:
         meanerr_aper, stderr_aper = avsigclip(aperrs,3,3)
 
-    pixfrac = 1.0
-    rr = pixfrac/pscale*0.11
-    drizcor = rr/(1-1/(3*rr)) # drizzling corr factor from Fruchter&Hook (valid for rr>1)
-    print(f'Pixel correlation noise factor for pixfrac = 1.0, pixel scale = {pscale} arcsec: {round(drizcor, 3)}')
+    rr = pixfrac/pscale*natscale
+    if (rr >= 1.):
+        drizcor = rr/(1-1/(3*rr)) # drizzling corr factor from Fruchter&Hook 
+    else:
+        drizcor = 1/(1-rr/3)
+    print(f'Pixel correlation noise factor for pixfrac = {pixfrac}, pixel scale = {pscale} arcsec: {round(drizcor, 3)}')
 
     # get limiting flux and magnitude 
-    apcor_at_limrad = get_apcor(apdiam_lim/2, apcorfname, 0.11, plot=False)
+    apcor_at_limrad = get_apcor(apdiam_lim/2, apcorfname, natscale, filter, plot=False)
     print(f'Aperture correction at radius = {apdiam_lim/2}: {round(apcor_at_limrad,3)}')
 
     npix_aper = np.sqrt(aper.area)
@@ -142,11 +190,14 @@ def get_apernoise(imname, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, de
     limflux_1sig_perpix = std_aper/npix_aper
 
     # calibrated 5 sigma flux, without aper correction
-    limflux_5sig_aper = 5 * npix_lim * limflux_1sig_perpix * 23.5045 * pscale**2 # muJy
+    #limflux_5sig_aper = 5 * npix_lim * limflux_1sig_perpix * 23.5045 * pscale**2 # muJy
+    limflux_5sig_aper = 5 * npix_lim * limflux_1sig_perpix * calfactor # muJy
     limmag_AB_5sig = -2.5 * np.log10(limflux_5sig_aper * 1e-6) + 8.9
 
     # with aperture correction
-    limflux_5sig_apcor = 5 * npix_lim * limflux_1sig_perpix * apcor_at_limrad * 23.5045 * pscale**2 # muJy
+    #limflux_5sig_apcor = 5 * npix_lim * limflux_1sig_perpix * apcor_at_limrad * 23.5045 * pscale**2 # muJy
+    limflux_5sig_apcor = 5 * npix_lim * limflux_1sig_perpix * apcor_at_limrad * calfactor # muJy
+
     limmag_AB_5sig_apcor = -2.5 * np.log10(limflux_5sig_apcor * 1e-6) + 8.9
    
     print('*******************************************************')
@@ -201,3 +252,4 @@ def get_apernoise(imname, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, de
         ax.set_ylabel('N',size=14)
         figaperdist.savefig(outroot+'_pixelstats_comp.png', dpi=200,bbox_inches='tight')
 
+    return limmag_AB_5sig, limmag_AB_5sig_apcor, std_aper/medianstd_stats, std_aper/meanerr_aper

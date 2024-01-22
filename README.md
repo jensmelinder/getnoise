@@ -20,7 +20,7 @@ get_apernoise(<JWST fits file name>, <naper>, <pixel scale>, bgdr=5,
               aprad=0.15, apdiam_lim=0.45, detlim=1.0, minarea = 10,
               errstats=True, plots=True, outroot='None',
               xs=xs, xe=xe, ys=ys, ye=ye,
-              apcorfname = 'jwst_miri_apcorr_0010.fits', 
+              apcorfname = 'jwst_miri_apcorr_0010.fits', detector = 'MIRIM',
               pixfrac=1.0, bunit = 'MJy/sr', filter='F560W')
 ```
 

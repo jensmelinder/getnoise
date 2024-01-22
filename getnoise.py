@@ -18,12 +18,12 @@ def avsigclip(data,niter,sig):
     """
     Computes the average in a numpy array after sigma clipping.
     """
-    mean = data.mean()
-    stdev= data.std()
+    mean = np.nanmean(data)
+    stdev= np.nanstd(data)
     for ii in range(niter):
         data = data[(data>(mean - sig*stdev))&(data<(mean + sig*stdev))]
-        mean = data.mean()
-        stdev= data.std()
+        mean = np.nanmean(data)
+        stdev= np.nanstd(data)
     return mean,stdev
 
 def get_apcor(rad, apcorfname, pscale, filter, plot=True):
@@ -32,7 +32,7 @@ def get_apcor(rad, apcorfname, pscale, filter, plot=True):
     if ('miri' in apcorfname):
         mm = (apcordata['filter'] == filter) & (apcordata['subarray'] =='FULL')
     elif ('nircam' in apcorfname):
-        mm = (apcordata['filter'] == filter)
+        mm = (apcordata['filter'] == filter) & (apcordata['pupil'] =='CLEAR')
     elif ('niriss' in apcorfname):
         mm = (apcordata['pupil'] == filter)
     else:
@@ -59,7 +59,7 @@ def get_apcor(rad, apcorfname, pscale, filter, plot=True):
 # function to calculate the stats
 def get_apernoise(imroot, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, detlim=1.0, minarea=10, errstats=True, plots=True, 
                   outroot='None', xs=-1, xe=-1, ys=-1, ye=-1, apcorfname = 'jwst_miri_apcorr_0010.fits', 
-                  detector='MIRIM', pixfrac=1.0, bunit = 'MJy/sr', filter='F560W'):
+                  detector='MIRIMAGE', pixfrac=1.0, bunit = 'MJy/sr', filter='F560W'):
     '''Function that calculates aperture statistics on a JWST image. Uses HST style filenames (sci/wht).'''
     # read data
     im=fits.getdata(imroot+'_sci.fits', 0).byteswap().newbyteorder()
@@ -223,12 +223,14 @@ def get_apernoise(imroot, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, de
 
         if errstats:
             figsnr,ax = plt.subplots(figsize=(8,8))
-            ax.hist(snrvalues,bins=100,color='tab:red',alpha=0.5,histtype='stepfilled', label='SNR (per pixel)')
-            ax.hist(snrvalues,bins=100, histtype='step', color='maroon')
+            meandiff, stddiff = avsigclip(snrvalues,3,3)
+            bbins = np.linspace(meandiff-stddiff*8,meandiff+stddiff*8,100)
+            ax.hist(snrvalues,bins=bbins,color='tab:red',alpha=0.5,histtype='stepfilled', label='SNR (per pixel)')
+            ax.hist(snrvalues,bins=bbins, histtype='step', color='maroon')
             meandiff, stddiff = avsigclip(snrvalues,3,3)
             ax.errorbar(meandiff,50000,marker='None',xerr=stddiff, color='k', lw=2, capsize=5, capthick=2, label='SNR stdev = '+str(round(stddiff,2)))
             ax.axvline(meandiff, ls=':',lw=2,color='k',label='Mean SNR = '+str(round(meandiff,2)))
-            ax.set_xlim(-3.1,3.1)
+            ax.set_xlim(meandiff-stddiff*4,meandiff+stddiff*4)
             ax.legend()
             figsnr.savefig(outroot+'_snrdist_errext.png',dpi=200,bbox_inches='tight')
 
@@ -237,17 +239,18 @@ def get_apernoise(imroot, naper, pscale, bgdr=5, aprad=0.15, apdiam_lim=0.45, de
         ax.hist(apfluxes_nobg,bins=int(naper/25), histtype='step', color='maroon')
         halfy = ax.get_ylim()[1]/2
         ax.errorbar(0,halfy,marker='None',xerr=std_aper, color='k', lw=2, capsize=5, capthick=2, 
-                    label='Aperture std = '+str(round(std_aper,6))+' MJy/sr')
+                    label='Aperture std = '+str(round(std_aper,6))+' '+bunit)
         ax.errorbar(0,(halfy-halfy/14),marker='None',xerr=medianstd_stats, color='tab:cyan', lw=2, capsize=5, 
-                    capthick=2,label='pix2pix std = '+str(round(medianstd_stats,6))+' MJy/sr')
+                    capthick=2,label='pix2pix std = '+str(round(medianstd_stats,6))+' '+bunit)
         ax.errorbar(0,(halfy-2*halfy/14),marker='None',xerr=medianstd_stats*drizcor, color='tab:green', 
                     lw=2, capsize=5, capthick=2, label='pix2pix std (drizcor)')
         ax.errorbar(0,(halfy-3*halfy/14),marker='None',xerr=meanerr_aper, color='tab:purple', lw=2, 
-                    capsize=5, capthick=2, label='ERR ext. std = '+str(round(meanerr_aper,6))+' MJy/sr')
+                    capsize=5, capthick=2, label='ERR ext. std = '+str(round(meanerr_aper,6))+' '+bunit)
         ax.set_xlim(-std_aper*4,std_aper*4)
         ax.legend(fontsize='12', loc=3)
-        ax.set_xlabel(r'F (MJy/sr)',size=14)
+        ax.set_xlabel(f'F ({bunit})',size=14)
         ax.set_ylabel('N',size=14)
+        ax.set_title(f'{detector}, {filter}')
         figaperdist.savefig(outroot+'_pixelstats_comp.png', dpi=200,bbox_inches='tight')
 
-    return limmag_AB_5sig, limmag_AB_5sig_apcor, std_aper/medianstd_stats, std_aper/meanerr_aper
+    return filter, limmag_AB_5sig, limmag_AB_5sig_apcor, std_aper/medianstd_stats, std_aper/meanerr_aper
